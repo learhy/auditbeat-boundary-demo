@@ -1,153 +1,122 @@
 #!/bin/bash
 
 # Boundary Session Generator
-# This script connects to a running Boundary dev instance, authenticates,
-# and creates SSH sessions through Boundary to demonstrate session tracking
-# and audit logging capabilities.
+# This script authenticates with Boundary and establishes REAL SSH connections
+# through Boundary with injected SSH certificates, executing commands that
+# trigger audit events captured by Auditbeat.
 
 set -e
 
 BOUNDARY_ADDR="${BOUNDARY_ADDR:-http://host.docker.internal:9200}"
+SHARED_DIR="/shared"
 LOG_FILE="/tmp/audit-demo/boundary-activity.log"
 mkdir -p /tmp/audit-demo
 
-# Function to log activity in structured JSON format
+# Function to log session activity
 log_activity() {
-  local event_action="$1"
-  local user_name="$2"
-  local session_id="$3"
-  local boundary_session_id="$4"
-  local boundary_user_id="$5"
-  local boundary_target_id="$6"
-  local process_name="$7"
-  local process_args="$8"
-  local file_path="$9"
-  
-  cat >> "$LOG_FILE" << EOF
-{"@timestamp":"$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)","event.action":"$event_action","user.name":"$user_name","session.id":"$session_id","boundary.session_id":"$boundary_session_id","boundary.user_id":"$boundary_user_id","boundary.target_id":"$boundary_target_id","process.name":"$process_name","process.args":"$process_args","file.path":"$file_path"}
-EOF
+  local msg="$1"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%S)Z $msg" | tee -a "$LOG_FILE"
 }
 
-echo "🔐 Authenticating with Boundary at $BOUNDARY_ADDR..."
+log_activity "Starting Boundary session generation"
 
-# Wait for Boundary to be available
-MAX_RETRIES=30
-RETRY_COUNT=0
-while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-  if curl -s -f "$BOUNDARY_ADDR/v1/auth-methods?scope_id=global" > /dev/null 2>&1; then
-    echo "✅ Boundary is available"
+# Wait for TARGET_ID from boundary-setup
+echo "⏳ Waiting for TARGET_ID from boundary-setup..."
+for i in $(seq 1 60); do
+  if [ -s "$SHARED_DIR/target-id" ]; then
+    TARGET_ID=$(cat "$SHARED_DIR/target-id")
+    log_activity "✅ Got TARGET_ID: $TARGET_ID"
     break
   fi
-  RETRY_COUNT=$((RETRY_COUNT + 1))
-  if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-    echo "⚠️  Boundary not available after $MAX_RETRIES attempts. Skipping session generation."
+  echo "  Waiting for target-id ($i)..."; sleep 2
+  if [ "$i" -eq 60 ]; then
+    log_activity "❌ TARGET_ID not found after 60 attempts"
     exit 0
   fi
-  echo "⏳ Waiting for Boundary to be available (attempt $RETRY_COUNT/$MAX_RETRIES)..."
-  sleep 10
 done
 
-# Get the password auth method ID
-AUTH_METHOD_ID=$(curl -s "$BOUNDARY_ADDR/v1/auth-methods?scope_id=global" | \
-  jq -r '.items[] | select(.type == "password") | .id' | head -n 1)
-
-if [ -z "$AUTH_METHOD_ID" ]; then
-  echo "⚠️  No password auth method found. Boundary may not be fully configured."
-  exit 0
-fi
-
-echo "🔑 Auth Method ID: $AUTH_METHOD_ID"
-
-# Authenticate with admin credentials
-AUTH_RESPONSE=$(curl -s -X POST "$BOUNDARY_ADDR/v1/auth-methods/$AUTH_METHOD_ID:authenticate" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "attributes": {
-      "login_name": "admin",
-      "password": "password"
-    }
-  }')
-
-TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.attributes.token // empty')
-
-if [ -z "$TOKEN" ]; then
-  echo "⚠️  Authentication failed. Response: $AUTH_RESPONSE"
-  exit 0
-fi
-
-echo "✅ Authenticated successfully"
-
-# Get the target ID (created by auto-configure-boundary.sh)
-TARGETS_RESPONSE=$(curl -s -X GET "$BOUNDARY_ADDR/v1/targets?scope_id=global&recursive=true" \
-  -H "Authorization: Bearer $TOKEN")
-
-TARGET_ID=$(echo "$TARGETS_RESPONSE" | jq -r '.items[] | select(.name == "ssh-demo-target") | .id' | head -n 1)
-
-if [ -z "$TARGET_ID" ]; then
-  echo "⚠️  ssh-demo-target not found. Boundary setup may not be complete."
-  echo "Available targets: $(echo "$TARGETS_RESPONSE" | jq -r '.items[].name')"
-  exit 0
-fi
-
-echo "🎯 Target ID: $TARGET_ID"
-
-# Create a session authorization
-echo "🔌 Creating Boundary session..."
-SESSION_RESPONSE=$(curl -s -X POST "$BOUNDARY_ADDR/v1/targets/$TARGET_ID:authorize-session" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json")
-
-SESSION_AUTH_TOKEN=$(echo "$SESSION_RESPONSE" | jq -r '.authorization_token // empty')
-BOUNDARY_SESSION_ID=$(echo "$SESSION_RESPONSE" | jq -r '.session_id // empty')
-
-if [ -z "$SESSION_AUTH_TOKEN" ] || [ -z "$BOUNDARY_SESSION_ID" ]; then
-  echo "⚠️  Failed to authorize session. Response: $SESSION_RESPONSE"
-  exit 0
-fi
-
-echo "✅ Session authorized: $BOUNDARY_SESSION_ID"
-
-# Log the session creation
-log_activity "boundary-session-created" "admin" "$$" "$BOUNDARY_SESSION_ID" "u_1234567890" "$TARGET_ID" "boundary" "connect ssh" ""
-
-# Instead of using boundary CLI (which isn't available in this container),
-# we'll use direct SSH through the connection information
-# In a real scenario, the boundary CLI would handle the proxy connection
-# For this demo, we'll simulate activity by logging it
-
-echo "🔄 Simulating Boundary SSH session activity..."
-
-# Simulate various activities that would occur during a Boundary session
-ACTIVITIES=(
-  "normal-file-access:/etc/hosts:cat"
-  "config-file-read:/etc/ssh/sshd_config:cat"
-  "privilege-escalation:/bin/sudo:sudo -l"
-  "sensitive-file-access:/etc/passwd:cat"
-  "process-listing:/bin/ps:ps aux"
-)
-
-for activity in "${ACTIVITIES[@]}"; do
-  IFS=':' read -r event_type file_path process_name <<< "$activity"
-  
-  # Log the activity
-  log_activity "$event_type" "admin" "$$" "$BOUNDARY_SESSION_ID" "u_1234567890" "$TARGET_ID" "$process_name" "$process_name $file_path" "$file_path"
-  
-  echo "  📝 Logged: $event_type on $file_path"
-  sleep 1
+# Wait for Boundary to be ready
+log_activity "Checking Boundary availability at $BOUNDARY_ADDR..."
+for i in $(seq 1 30); do
+  if curl -sf "$BOUNDARY_ADDR/v1/scopes" >/dev/null 2>&1; then
+    log_activity "✅ Boundary is available"
+    break
+  fi
+  echo "  Waiting for Boundary ($i)..."; sleep 3
+  if [ "$i" -eq 30 ]; then
+    log_activity "❌ Boundary not available"
+    exit 0
+  fi
 done
 
-# Note: In a production environment with the boundary CLI installed, we would:
-# 1. Use: boundary connect ssh -target-id $TARGET_ID -authz-token $SESSION_AUTH_TOKEN
-# 2. Execute actual commands through the SSH connection
-# 3. The Boundary worker would inject credentials and proxy the connection
-# 4. SSH certificate metadata would flow through to the target system
-# 5. Auditbeat would capture the actual SSH events with Boundary session context
+# Check if boundary CLI is available
+if ! command -v boundary >/dev/null 2>&1; then
+  log_activity "❌ boundary CLI not found in PATH"
+  exit 1
+fi
 
-# For now, we're demonstrating the session lifecycle and logging pattern
-echo "✅ Boundary session activity completed"
+log_activity "🔑 Authenticating to Boundary..."
 
-# The session will naturally expire or can be cancelled
-echo "🏁 Session $BOUNDARY_SESSION_ID completed"
-log_activity "boundary-session-ended" "admin" "$$" "$BOUNDARY_SESSION_ID" "u_1234567890" "$TARGET_ID" "boundary" "disconnect" ""
+# Authenticate with Boundary and capture token
+export BOUNDARY_ADDR
+export BOUNDARY_PASSWORD=password
+AUTH_OUTPUT=$(boundary authenticate password \
+  -auth-method-id ampw_1234567890 \
+  -login-name admin \
+  -password env://BOUNDARY_PASSWORD \
+  -keyring-type none \
+  -format json 2>&1)
 
+if [ $? -ne 0 ]; then
+  log_activity "❌ Failed to authenticate with Boundary"
+  echo "$AUTH_OUTPUT" | tee -a "$LOG_FILE"
+  exit 0
+fi
+
+# Extract token from JSON response
+BOUNDARY_TOKEN=$(echo "$AUTH_OUTPUT" | jq -r '.item.attributes.token' 2>/dev/null)
+if [ -z "$BOUNDARY_TOKEN" ] || [ "$BOUNDARY_TOKEN" = "null" ]; then
+  log_activity "❌ Failed to extract token from auth response"
+  exit 0
+fi
+
+export BOUNDARY_TOKEN
+log_activity "✅ Authenticated with Boundary"
+
+# Establish SSH session through Boundary and run commands
+log_activity "🔔 Establishing SSH session through Boundary to target $TARGET_ID..."
+
+# Run commands through Boundary SSH connection  
+# boundary connect ssh will proxy SSH and pass any remaining args to ssh command
+log_activity "Running whoami command..."
+if boundary connect ssh \
+  -target-id "$TARGET_ID" \
+  -username ubuntu \
+  whoami 2>&1 | tee -a "$LOG_FILE"; then
+  log_activity "✅ SSH session 1 (whoami) completed"
+else
+  log_activity "⚠️ SSH session 1 failed"
+fi
+
+log_activity "Reading /etc/passwd..."
+if boundary connect ssh \
+  -target-id "$TARGET_ID" \
+  -username ubuntu \
+  cat /etc/passwd 2>&1 | tee -a "$LOG_FILE"; then
+  log_activity "✅ SSH session 2 (cat /etc/passwd) completed"
+else
+  log_activity "⚠️ SSH session 2 failed"
+fi
+
+log_activity "Listing processes..."
+if boundary connect ssh \
+  -target-id "$TARGET_ID" \
+  -username ubuntu \
+  ps aux 2>&1 | tee -a "$LOG_FILE"; then
+  log_activity "✅ SSH session 3 (ps aux) completed"
+else
+  log_activity "⚠️ SSH session 3 failed"
+fi
+
+log_activity "🏁 Session generation cycle complete"
 exit 0

@@ -3,6 +3,9 @@
 echo "🎯 Auto-configuring Boundary for SSH session monitoring..."
 
 BOUNDARY_ADDR="http://host.docker.internal:9200"
+VAULT_ADDR="http://localhost:8200"  # Boundary dev runs on host, so use localhost
+SHARED_DIR="/shared"
+
 echo "Waiting for Boundary dev instance at $BOUNDARY_ADDR..."
 
 # Wait up to 5 minutes for Boundary to be ready
@@ -89,7 +92,92 @@ else
     echo "✅ Created new project: $PROJECT_ID"
 fi
 
-# Create or find SSH target
+# Wait for Vault token to be ready
+echo "⏳ Waiting for Vault token from vault-setup..."
+for i in $(seq 1 60); do
+  if [ -s "$SHARED_DIR/boundary-vault-token" ]; then
+    VAULT_TOKEN=$(cat "$SHARED_DIR/boundary-vault-token")
+    echo "✅ Got Vault token"
+    break
+  fi
+  echo "  Waiting for Vault token ($i)..."; sleep 2
+  if [ "$i" -eq 60 ]; then echo "❌ Vault token not found"; exit 1; fi
+done
+
+# Create Vault credential store
+echo "🔐 Creating Vault credential store..."
+CSTORE_RESPONSE=$(curl -s -X POST "$BOUNDARY_ADDR/v1/credential-stores" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"scope_id\": \"$PROJECT_ID\",
+        \"name\": \"vault-store\",
+        \"description\": \"Vault credential store for SSH certs\",
+        \"type\": \"vault\",
+        \"attributes\": {
+            \"address\": \"$VAULT_ADDR\",
+            \"token\": \"$VAULT_TOKEN\"
+        }
+    }")
+
+CSTORE_ID=$(echo "$CSTORE_RESPONSE" | jq -r '.item.id' 2>/dev/null)
+if [ -z "$CSTORE_ID" ] || [ "$CSTORE_ID" = "null" ]; then
+    echo "⚠️ Credential store creation failed. Response:"
+    echo "$CSTORE_RESPONSE" | jq .
+    echo "⚠️ Searching for existing credential store..."
+    EXISTING_CSTORES=$(curl -s -H "Authorization: Bearer $TOKEN" "$BOUNDARY_ADDR/v1/credential-stores?scope_id=$PROJECT_ID")
+    CSTORE_ID=$(echo "$EXISTING_CSTORES" | jq -r '.items[] | select(.name=="vault-store") | .id' 2>/dev/null)
+    if [ -z "$CSTORE_ID" ] || [ "$CSTORE_ID" = "null" ]; then
+        echo "❌ Failed to create or find credential store"
+        echo "Search response:"
+        echo "$EXISTING_CSTORES" | jq .
+        exit 1
+    fi
+    echo "✅ Found existing credential store: $CSTORE_ID"
+else
+    echo "✅ Created credential store: $CSTORE_ID"
+fi
+
+# Create SSH certificate credential library
+echo "📜 Creating SSH certificate credential library..."
+CLIB_RESPONSE=$(curl -s -X POST "$BOUNDARY_ADDR/v1/credential-libraries" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"credential_store_id\": \"$CSTORE_ID\",
+        \"name\": \"ssh-cert-library\",
+        \"description\": \"SSH certificate library\",
+        \"type\": \"vault-ssh-certificate\",
+        \"attributes\": {
+            \"path\": \"ssh/sign/boundary-client\",
+            \"username\": \"ubuntu\",
+            \"key_type\": \"ecdsa\",
+            \"key_bits\": 521,
+            \"extensions\": {
+                \"permit-pty\": \"\"
+            }
+        }
+    }")
+
+CLIB_ID=$(echo "$CLIB_RESPONSE" | jq -r '.item.id' 2>/dev/null)
+if [ -z "$CLIB_ID" ] || [ "$CLIB_ID" = "null" ]; then
+    echo "⚠️ Credential library creation failed. Response:"
+    echo "$CLIB_RESPONSE" | jq .
+    echo "⚠️ Searching for existing credential library..."
+    EXISTING_CLIBS=$(curl -s -H "Authorization: Bearer $TOKEN" "$BOUNDARY_ADDR/v1/credential-libraries?credential_store_id=$CSTORE_ID")
+    CLIB_ID=$(echo "$EXISTING_CLIBS" | jq -r '.items[] | select(.name=="ssh-cert-library") | .id' 2>/dev/null)
+    if [ -z "$CLIB_ID" ] || [ "$CLIB_ID" = "null" ]; then
+        echo "❌ Failed to create or find credential library"
+        echo "Search response:"
+        echo "$EXISTING_CLIBS" | jq .
+        exit 1
+    fi
+    echo "✅ Found existing credential library: $CLIB_ID"
+else
+    echo "✅ Created credential library: $CLIB_ID"
+fi
+
+# Create SSH target (type=ssh, not tcp)
 echo "🎯 Creating SSH target..."
 TARGET_RESPONSE=$(curl -s -X POST "$BOUNDARY_ADDR/v1/targets" \
     -H "Authorization: Bearer $TOKEN" \
@@ -97,12 +185,10 @@ TARGET_RESPONSE=$(curl -s -X POST "$BOUNDARY_ADDR/v1/targets" \
     -d "{
         \"scope_id\": \"$PROJECT_ID\",
         \"name\": \"ssh-demo-target\", 
-        \"description\": \"SSH target for demo\",
-        \"type\": \"tcp\",
-        \"attributes\": {
-            \"default_port\": 2222
-        },
-        \"address\": \"host.docker.internal\"
+        \"description\": \"SSH target for demo with certificate injection\",
+        \"type\": \"ssh\",
+        \"default_port\": 2222,
+        \"address\": \"localhost\"
     }")
 
 TARGET_ID=$(echo "$TARGET_RESPONSE" | jq -r '.item.id' 2>/dev/null)
@@ -122,6 +208,25 @@ else
     echo "✅ Created new target: $TARGET_ID"
 fi
 
+# Attach credential library to target
+echo "🔗 Attaching SSH certificate library to target..."
+ATTACH_RESPONSE=$(curl -s -X POST "$BOUNDARY_ADDR/v1/targets/$TARGET_ID:add-credential-sources" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"injected_application_credential_source_ids\": [\"$CLIB_ID\"]
+    }")
+
+if echo "$ATTACH_RESPONSE" | jq -e '.item' >/dev/null 2>&1; then
+    echo "✅ Attached credential library to target"
+else
+    echo "⚠️ Credential library may already be attached"
+fi
+
+# Save TARGET_ID to shared volume for activity-generator
+mkdir -p "$SHARED_DIR"
+echo "$TARGET_ID" > "$SHARED_DIR/target-id"
+
 echo ""
 echo "🎉 BOUNDARY AUTO-CONFIGURATION COMPLETE!"
 echo "================================================"
@@ -129,6 +234,8 @@ echo "🎯 TARGET_ID=$TARGET_ID"
 echo "🔗 BOUNDARY_ADDR=$BOUNDARY_ADDR"  
 echo "📁 PROJECT_ID=$PROJECT_ID"
 echo "🔑 AUTH_METHOD_ID=$AUTH_METHOD_ID"
+echo "🔐 CSTORE_ID=$CSTORE_ID"
+echo "📜 CLIB_ID=$CLIB_ID"
 echo "================================================"
 echo ""
 echo "🚀 Connect with:"

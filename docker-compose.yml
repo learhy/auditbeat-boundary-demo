@@ -21,19 +21,32 @@ services:
     depends_on:
       - elasticsearch
 
-  kibana-setup:
+  # Vault dev server
+  vault:
+    image: hashicorp/vault:1.15
+    container_name: boundary-vault
+    environment:
+      - VAULT_DEV_ROOT_TOKEN_ID=groot
+      - VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200
+    ports:
+      - "8200:8200"
+    cap_add:
+      - IPC_LOCK
+    command: server -dev -dev-root-token-id=groot -dev-listen-address=0.0.0.0:8200
+
+  # One-shot container to configure Vault SSH engine and write CA public key/token to shared volume
+  vault-setup:
     image: alpine:3.18
-    container_name: boundary-kibana-setup
+    container_name: boundary-vault-setup
     volumes:
       - ./scripts:/scripts
+      - shared:/shared
     depends_on:
-      - kibana
+      - vault
     command: >
       sh -c "
         apk add --no-cache curl jq &&
-        echo 'Waiting for Kibana to be ready...' &&
-        sleep 120 &&
-        /scripts/setup-boundary-dashboards.sh
+        /scripts/setup-vault-ssh.sh
       "
 
   ssh-target:
@@ -41,20 +54,17 @@ services:
     container_name: boundary-ssh-target
     volumes:
       - ./scripts:/scripts
+      - ./config:/config:ro
+      - shared:/shared
     ports:
       - "2222:22"
-    command: >
-      bash -c "
-        apt-get update &&
-        apt-get install -y openssh-server sudo &&
-        mkdir -p /var/run/sshd &&
-        useradd -m -s /bin/bash ubuntu &&
-        echo 'ubuntu:password' | chpasswd &&
-        echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers &&
-        echo 'LogLevel VERBOSE' >> /etc/ssh/sshd_config &&
-        echo 'SyslogFacility AUTHPRIV' >> /etc/ssh/sshd_config &&
-        /usr/sbin/sshd -D
-      "
+    command: /scripts/setup-ssh-target.sh
+    cap_add:
+      - AUDIT_CONTROL
+      - AUDIT_READ
+    depends_on:
+      - vault-setup
+      - elasticsearch
 
   # AUTOMATED BOUNDARY SETUP! 
   boundary-setup:
@@ -62,6 +72,7 @@ services:
     container_name: boundary-setup
     volumes:
       - ./scripts:/scripts
+      - shared:/shared
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -74,45 +85,36 @@ services:
         /scripts/auto-configure-boundary.sh
       "
 
-  auditbeat:
-    image: docker.elastic.co/beats/auditbeat:8.11.0
-    container_name: boundary-auditbeat
-    user: root
-    environment:
-      - ELASTICSEARCH_HOST=elasticsearch:9200
-    volumes:
-      - ./config/auditbeat.yml:/usr/share/auditbeat/auditbeat.yml:ro
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro
-      - /proc:/hostfs/proc:ro
-      - /:/hostfs:ro
-    depends_on:
-      - elasticsearch
-    pid: host
-    cap_add:
-      - AUDIT_CONTROL
-      - AUDIT_READ
-
   activity-generator:
     image: ubuntu:22.04
     container_name: boundary-activity-generator
     volumes:
       - ./scripts:/scripts
+      - shared:/shared
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    environment:
+      - BOUNDARY_VERSION=0.15.0
     command: >
       bash -c "
-        apt-get update && apt-get install -y sudo net-tools procps curl jq &&
-        while true; do
-          /scripts/generate-boundary-sessions.sh &&
-          sleep 45
+        set -e; \
+        apt-get update && \
+        DEBIAN_FRONTEND=noninteractive apt-get install -y sudo net-tools procps curl jq wget unzip openssh-client && \
+        echo 'Installing Boundary CLI...'; \
+        ver=$${BOUNDARY_VERSION:-0.15.0}; arch=$$(uname -m); \
+        case \"$$arch\" in aarch64|arm64) pkgarch=arm64 ;; x86_64|amd64) pkgarch=amd64 ;; *) pkgarch=amd64 ;; esac; \
+        url=\"https://releases.hashicorp.com/boundary/$$ver/boundary_$${ver}_linux_$${pkgarch}.zip\"; \
+        curl -fsSL -o /tmp/boundary.zip \"$$url\" && unzip -o /tmp/boundary.zip -d /usr/local/bin && chmod +x /usr/local/bin/boundary && rm /tmp/boundary.zip; \
+        while true; do \
+          /scripts/generate-boundary-sessions.sh; \
+          sleep 45; \
         done
       "
     depends_on:
       - boundary-setup
-      - auditbeat
 
 volumes:
   esdata:
+    driver: local
+  shared:
     driver: local
