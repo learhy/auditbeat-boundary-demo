@@ -75,11 +75,19 @@ services:
       - shared:/shared
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    environment:
+      - BOUNDARY_VERSION=0.19.3+ent
     depends_on:
       - ssh-target
     command: >
       sh -c "
-        apk add --no-cache curl jq &&
+        apk add --no-cache curl jq unzip &&
+        echo '🔑 Installing Boundary Enterprise CLI...' &&
+        ver=0.19.3+ent; arch=$$(uname -m); 
+        case \"$$arch\" in aarch64|arm64) pkgarch=arm64 ;; x86_64|amd64) pkgarch=amd64 ;; *) pkgarch=amd64 ;; esac;
+        url=\"https://releases.hashicorp.com/boundary/$${ver}/boundary_$${ver}_linux_$${pkgarch}.zip\";
+        curl -fsSL -o /tmp/boundary.zip \"$$url\" && unzip -o /tmp/boundary.zip -d /usr/local/bin && chmod +x /usr/local/bin/boundary && rm /tmp/boundary.zip &&
+        echo '✅ Boundary CLI installed' &&
         echo '🚀 Waiting for Boundary dev to start...' &&
         echo 'Please run: boundary dev' &&
         /scripts/auto-configure-boundary.sh
