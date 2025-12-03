@@ -186,7 +186,7 @@ TARGET_RESPONSE=$(curl -s -X POST "$BOUNDARY_ADDR/v1/targets" \
         \"scope_id\": \"$PROJECT_ID\",
         \"name\": \"ssh-demo-target\", 
         \"description\": \"SSH target for demo with certificate injection\",
-        \"type\": \"tcp\",
+        \"type\": \"ssh\",
         \"default_port\": 2222,
         \"address\": \"localhost\"
     }")

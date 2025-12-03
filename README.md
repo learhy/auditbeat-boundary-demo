@@ -1,36 +1,51 @@
 
 # Auditbeat Boundary Demo Environment
 
-A complete demo environment showing how Auditbeat can provide detailed session audit logging that is complimentary to Boundary Session Recording. This demo integrates HashiCorp Boundary to demonstrate how session metadata (session IDs, user IDs, target IDs) can be captured and correlated with audit events.
+A complete demo environment showing how Auditbeat can provide detailed session audit logging that is complimentary to Boundary Session Recording. This demo integrates **HashiCorp Boundary Enterprise** to demonstrate how session metadata (session IDs, user IDs, target IDs) can be automatically injected into SSH sessions via Vault-signed certificates and correlated with audit events.
+
+**⚠️ Requires Boundary Enterprise License** - SSH certificate injection with session metadata requires Boundary Enterprise. Open-source Boundary does not support this feature.
 
 ## Quick Start
 
 1. **Prerequisites**: 
    - Install Docker and Docker Compose
    - Install HashiCorp Boundary CLI: `brew install hashicorp/tap/boundary` (macOS) or [download from HashiCorp](https://developer.hashicorp.com/boundary/downloads)
+   - **Boundary Enterprise License** (required for SSH certificate injection)
 
-2. **Start Boundary Dev Mode**:
+2. **Add Your Enterprise License**:
 
-   In a **separate terminal window**, start Boundary in development mode:
+   Place your `boundary-license.hclic` file in the project root directory. The license is already in `.gitignore` to prevent accidental commits.
+
+3. **Start Boundary Enterprise Dev Mode**:
+
+   In a **separate terminal window**, start Boundary in development mode with your enterprise license:
    ```bash
+   ./start-boundary-enterprise.sh
+   ```
+   
+   Or manually:
+   ```bash
+   export BOUNDARY_LICENSE="$(cat boundary-license.hclic)"
    boundary dev
    ```
    
    **Keep this terminal running!** The demo containers will connect to Boundary at `http://localhost:9200`.
    
-   Development mode provides:
+   Enterprise development mode provides:
    - Pre-configured admin user (login: `admin`, password: `password`)
    - API endpoint on port 9200
+   - **SSH target type** with credential injection
+   - **Vault SSH certificate injection** with session metadata
    - No persistent storage (resets on restart)
 
-3. **Clone and start the demo**:
+4. **Clone and start the demo**:
    ```bash
    git clone git@github.com:learhy/auditbeat-boundary-demo.git
    cd auditbeat-boundary-demo
    docker-compose up -d
    ```
 
-4. **HUGELY IMPORTANT: Wait for initial setup (about 3-4 minutes)**:
+5. **Wait for initial setup (about 3-4 minutes)**:
 
    The Kibana instance takes a few minutes to configure. If you access Kibana before it's configured, the data won't pop out at you. 
 
@@ -45,13 +60,13 @@ A complete demo environment showing how Auditbeat can provide detailed session a
    docker-compose logs -f activity-generator
    ```
 
-5. **Access Kibana**:
+6. **Access Kibana**:
 
 Open [`http://localhost:5601`](http://localhost:5601)
 
-6. **(Optional) Manually connect via Boundary**:
+7. **(Optional) Manually connect via Boundary**:
 
-   After auto-configuration completes, you can manually connect to the SSH target through Boundary:
+   After auto-configuration completes, you can manually connect to the SSH target through Boundary with automatic certificate injection:
    
    ```bash
    # Authenticate with Boundary
@@ -60,10 +75,17 @@ Open [`http://localhost:5601`](http://localhost:5601)
    # Get the target ID from setup logs
    docker-compose logs boundary-setup | grep TARGET_ID
    
-   # Connect through Boundary (use the TARGET_ID from above)
+   # Connect through Boundary with SSH certificate injection
+   # No password required - Vault-signed certificate is automatically injected!
    boundary connect ssh -target-id <TARGET_ID> -username ubuntu
-   # Password: password
    ```
+   
+   **What's happening:**
+   - Boundary requests a signed SSH certificate from Vault
+   - The certificate includes session metadata (session_id, user_id) in principals
+   - Certificate is automatically injected into the SSH session
+   - Target's SSH daemon validates the certificate against Vault's CA
+   - Session metadata flows through to audit logs captured by Auditbeat
 
 ## What's Included
 
