@@ -12,11 +12,23 @@ A complete demo environment showing how Auditbeat can provide detailed session a
    - Install HashiCorp Boundary CLI: `brew install hashicorp/tap/boundary` (macOS) or [download from HashiCorp](https://developer.hashicorp.com/boundary/downloads)
    - **Boundary Enterprise License** (required for SSH certificate injection)
 
-2. **Add Your Enterprise License**:
+2. **Clone the repository**:
+   ```bash
+   git clone git@github.com:learhy/auditbeat-boundary-demo.git
+   cd auditbeat-boundary-demo
+   ```
 
-   Place your `boundary-license.hclic` file in the project root directory. The license is already in `.gitignore` to prevent accidental commits.
+3. **Add Your Enterprise License**:
 
-3. **Start Boundary Enterprise Dev Mode**:
+   Place your `boundary-license.hclic` file in the project root directory:
+   ```bash
+   # Copy your license file into the repo
+   cp /path/to/your/boundary-license.hclic .
+   ```
+   
+   The license is already in `.gitignore` to prevent accidental commits.
+
+4. **Start Boundary Enterprise Dev Mode**:
 
    In a **separate terminal window**, start Boundary in development mode with your enterprise license:
    ```bash
@@ -38,14 +50,12 @@ A complete demo environment showing how Auditbeat can provide detailed session a
    - **Vault SSH certificate injection** with session metadata
    - No persistent storage (resets on restart)
 
-4. **Clone and start the demo**:
+5. **Start the demo containers**:
    ```bash
-   git clone git@github.com:learhy/auditbeat-boundary-demo.git
-   cd auditbeat-boundary-demo
    docker-compose up -d
    ```
 
-5. **Wait for initial setup (about 3-4 minutes)**:
+6. **Wait for initial setup (about 3-4 minutes)**:
 
    The Kibana instance takes a few minutes to configure. If you access Kibana before it's configured, the data won't pop out at you. 
 
@@ -60,11 +70,11 @@ A complete demo environment showing how Auditbeat can provide detailed session a
    docker-compose logs -f activity-generator
    ```
 
-6. **Access Kibana**:
+7. **Access Kibana**:
 
 Open [`http://localhost:5601`](http://localhost:5601)
 
-7. **(Optional) Manually connect via Boundary**:
+8. **(Optional) Manually connect via Boundary**:
 
    After auto-configuration completes, you can manually connect to the SSH target through Boundary with automatic certificate injection:
    
