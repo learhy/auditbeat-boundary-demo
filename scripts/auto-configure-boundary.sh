@@ -208,12 +208,19 @@ else
     echo "✅ Created new target: $TARGET_ID"
 fi
 
+# Get current target version first
+echo "🔍 Getting target version..."
+TARGET_INFO=$(curl -s -H "Authorization: Bearer $TOKEN" "$BOUNDARY_ADDR/v1/targets/$TARGET_ID")
+TARGET_VERSION=$(echo "$TARGET_INFO" | jq -r '.item.version')
+echo "ℹ️ Target version: $TARGET_VERSION"
+
 # Attach credential library to target with injected-application credentials
 echo "🔗 Attaching SSH certificate library to target with injection..."
 ATTACH_RESPONSE=$(curl -s -X POST "$BOUNDARY_ADDR/v1/targets/$TARGET_ID:add-credential-sources" \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d "{
+        \"version\": $TARGET_VERSION,
         \"injected_application_credential_source_ids\": [\"$CLIB_ID\"]
     }")
 
@@ -242,7 +249,8 @@ else
     echo "Attempting to fix by re-attaching with CLI..."
     # Try using Boundary CLI instead of API
     if command -v boundary >/dev/null 2>&1; then
-        boundary targets add-credential-sources \
+        export BOUNDARY_ADDR="http://host.docker.internal:9200"
+        BOUNDARY_TOKEN="$TOKEN" boundary targets add-credential-sources \
             -id "$TARGET_ID" \
             -injected-application-credential-source "$CLIB_ID" 2>&1 | grep -v "deprecated" || true
         echo "✅ Re-attached using Boundary CLI"
