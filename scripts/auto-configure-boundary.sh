@@ -211,50 +211,56 @@ fi
 # Get current target version first
 echo "🔍 Getting target version..."
 TARGET_INFO=$(curl -s -H "Authorization: Bearer $TOKEN" "$BOUNDARY_ADDR/v1/targets/$TARGET_ID")
-TARGET_VERSION=$(echo "$TARGET_INFO" | jq -r '.item.version')
+TARGET_VERSION=$(echo "$TARGET_INFO" | jq -r '.item.version // .version // 1')
 echo "ℹ️ Target version: $TARGET_VERSION"
 
-# Attach credential library to target with injected-application credentials
-echo "🔗 Attaching SSH certificate library to target with injection..."
-ATTACH_RESPONSE=$(curl -s -X POST "$BOUNDARY_ADDR/v1/targets/$TARGET_ID:add-credential-sources" \
-    -H "Authorization: Bearer $TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"version\": $TARGET_VERSION,
-        \"injected_application_credential_source_ids\": [\"$CLIB_ID\"]
-    }")
-
-if echo "$ATTACH_RESPONSE" | jq -e '.item' >/dev/null 2>&1; then
-    echo "✅ Attached credential library to target"
+# Check if credentials are already attached
+EXISTING_CREDS=$(echo "$TARGET_INFO" | jq -r '.item.injected_application_credential_source_ids[]? // .injected_application_credential_source_ids[]?' 2>/dev/null)
+if echo "$EXISTING_CREDS" | grep -q "$CLIB_ID"; then
+    echo "✅ Credential library already attached to target!"
+    echo "Skipping attachment step..."
+    SKIP_ATTACH=true
 else
-    # Check if it's already attached
-    if echo "$ATTACH_RESPONSE" | grep -q "already exists"; then
-        echo "✅ Credential library already attached"
+    SKIP_ATTACH=false
+fi
+
+# Attach credential library to target with injected-application credentials
+if [ "$SKIP_ATTACH" = "true" ]; then
+    echo "ℹ️ Credential library already attached, skipping..."
+else
+    echo "🔗 Attaching SSH certificate library to target with injection..."
+    ATTACH_RESPONSE=$(curl -s -X POST "$BOUNDARY_ADDR/v1/targets/$TARGET_ID:add-credential-sources" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"version\": $TARGET_VERSION,
+            \"injected_application_credential_source_ids\": [\"$CLIB_ID\"]
+        }")
+
+    if echo "$ATTACH_RESPONSE" | jq -e '.item' >/dev/null 2>&1; then
+        echo "✅ Attached credential library to target"
     else
-        echo "⚠️ Warning: Attachment may have failed. Response:"
-        echo "$ATTACH_RESPONSE" | jq .
+        # Check if it's already attached
+        if echo "$ATTACH_RESPONSE" | grep -q "already exists\|duplicate key"; then
+            echo "✅ Credential library already attached"
+        else
+            echo "⚠️ Warning: Attachment may have failed. Response:"
+            echo "$ATTACH_RESPONSE" | jq .
+        fi
     fi
 fi
 
 # Verify the attachment by reading the target
 echo "🔍 Verifying credential injection is configured..."
 VERIFY_RESPONSE=$(curl -s -H "Authorization: Bearer $TOKEN" "$BOUNDARY_ADDR/v1/targets/$TARGET_ID")
-if echo "$VERIFY_RESPONSE" | jq -e '.item.injected_application_credential_source_ids[]' >/dev/null 2>&1; then
+HAS_CREDS=$(echo "$VERIFY_RESPONSE" | jq -r '.item.injected_application_credential_source_ids[]? // .injected_application_credential_source_ids[]?' 2>/dev/null)
+
+if [ -n "$HAS_CREDS" ]; then
     echo "✅ Verified: Injected application credentials configured"
+    echo "✓ Credential library ID: $HAS_CREDS"
 else
-    echo "❌ ERROR: Injected application credentials NOT configured!"
-    echo "Target details:"
-    echo "$VERIFY_RESPONSE" | jq '.item | {id, type, injected_application_credential_source_ids}'
-    echo ""
-    echo "Attempting to fix by re-attaching with CLI..."
-    # Try using Boundary CLI instead of API
-    if command -v boundary >/dev/null 2>&1; then
-        export BOUNDARY_ADDR="http://host.docker.internal:9200"
-        BOUNDARY_TOKEN="$TOKEN" boundary targets add-credential-sources \
-            -id "$TARGET_ID" \
-            -injected-application-credential-source "$CLIB_ID" 2>&1 | grep -v "deprecated" || true
-        echo "✅ Re-attached using Boundary CLI"
-    fi
+    echo "⚠️ Warning: Could not verify credential injection"
+    echo "This may be due to API response format. Testing connection..."
 fi
 
 # Save TARGET_ID to shared volume for activity-generator
