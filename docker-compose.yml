@@ -1,0 +1,77 @@
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: boundary-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: boundary-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+
+  kibana-setup:
+    image: alpine:3.18
+    container_name: boundary-kibana-setup
+    volumes:
+      - ./scripts:/scripts
+    depends_on:
+      - kibana
+    command: >
+      sh -c "
+        apk add --no-cache curl jq &&
+        echo 'Waiting for Kibana to be ready...' &&
+        sleep 120 &&
+        /scripts/setup-kibana.sh
+      "
+
+  auditbeat:
+    image: docker.elastic.co/beats/auditbeat:8.11.0
+    container_name: boundary-auditbeat
+    user: root
+    environment:
+      - ELASTICSEARCH_HOST=elasticsearch:9200
+    volumes:
+      - ./config/auditbeat.yml:/usr/share/auditbeat/auditbeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro
+      - /proc:/hostfs/proc:ro
+      - /:/hostfs:ro
+    depends_on:
+      - elasticsearch
+    pid: host
+    cap_add:
+      - AUDIT_CONTROL
+      - AUDIT_READ
+
+  activity-generator:
+    image: ubuntu:22.04
+    container_name: boundary-activity-generator
+    volumes:
+      - ./scripts:/scripts
+    command: >
+      bash -c "
+        apt-get update && apt-get install -y sudo net-tools procps &&
+        while true; do
+          /scripts/activity-generator.sh &&
+          sleep 30
+        done
+      "
+    depends_on:
+      - auditbeat
+
+volumes:
+  esdata:
+    driver: local

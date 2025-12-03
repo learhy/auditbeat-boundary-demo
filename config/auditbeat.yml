@@ -1,0 +1,63 @@
+auditbeat.modules:
+- module: auditd
+  audit_rule_files: [ '${path.config}/audit.rules.d/*.conf' ]
+  audit_rules: |
+    # File access monitoring
+    -w /etc/passwd -p rwxa -k password_file
+    -w /etc/shadow -p rwxa -k shadow_file
+    -w /etc/ssh/sshd_config -p rwxa -k ssh_config
+    -w /root -p rwxa -k root_access
+    -w /tmp -p rwxa -k tmp_access
+    
+    # Process execution monitoring
+    -a always,exit -F arch=b64 -S execve -k process_execution
+    -a always,exit -F arch=b32 -S execve -k process_execution
+    
+    # Privilege escalation monitoring
+    -a always,exit -F path=/usr/bin/sudo -F perm=x -F auid>=1000 -F auid!=4294967295 -k privilege_escalation
+    -a always,exit -F path=/bin/su -F perm=x -F auid>=1000 -F auid!=4294967295 -k privilege_escalation
+
+- module: file_integrity
+  paths:
+  - /etc
+  - /root
+  - /tmp
+  exclude_files:
+  - '(?i)\.sw[nop]$'
+  - '~$'
+  - '/\.git($|/)'
+  scan_at_start: false
+  scan_rate_per_sec: 50 MiB
+  max_file_size: 100 MiB
+  hash_types: [sha1]
+
+- module: system
+  datasets:
+    - host
+    - process
+    - login
+    - package
+    - user
+  period: 10s
+  process.hash.hash_types: [sha1]
+  process.include_top_n.by_cpu: 5
+  process.include_top_n.by_memory: 5
+
+output.elasticsearch:
+  hosts: ["${ELASTICSEARCH_HOST:elasticsearch:9200}"]
+
+setup.template:
+  name: "auditbeat"
+  pattern: "auditbeat-*"
+  settings:
+    index.number_of_shards: 1
+
+setup.kibana:
+  host: "kibana:5601"
+
+logging.level: info
+
+processors:
+- add_host_metadata:
+    when.not.contains.tags: forwarded
+- add_docker_metadata: ~
