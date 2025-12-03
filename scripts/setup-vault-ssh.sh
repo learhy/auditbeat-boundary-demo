@@ -52,7 +52,7 @@ curl -sf -X POST "$VAULT_ADDR/v1/ssh/roles/boundary-client" \
   }' >/dev/null || echo "ℹ️ Role may already exist"
 
 # Create the policy directly with all required Boundary permissions
-POLICY_JSON='{"policy":"path \"ssh/sign/boundary-client\" {\n  capabilities = [\"update\"]\n}\npath \"sys/leases/revoke\" {\n  capabilities = [\"update\"]\n}\npath \"sys/leases/lookup\" {\n  capabilities = [\"update\"]\n}\npath \"sys/leases/renew\" {\n  capabilities = [\"update\"]\n}"}'
+POLICY_JSON='{"policy":"path \"ssh/sign/boundary-client\" {\n  capabilities = [\"create\", \"update\"]\n}\npath \"ssh/roles/boundary-client\" {\n  capabilities = [\"read\"]\n}\npath \"sys/leases/revoke\" {\n  capabilities = [\"update\"]\n}\npath \"sys/leases/lookup\" {\n  capabilities = [\"update\"]\n}\npath \"sys/leases/renew\" {\n  capabilities = [\"update\"]\n}"}'
 curl -sf -X PUT "$VAULT_ADDR/v1/sys/policy/boundary-sign" \
   -H "X-Vault-Token: $ROOT_TOKEN" \
   -H "Content-Type: application/json" \
