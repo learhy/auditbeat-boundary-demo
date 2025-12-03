@@ -10,7 +10,7 @@ A complete demo environment showing how Auditbeat can provide excellent detailed
 
 2. **Clone and start**:
 ```bash
-git clone <this-repo>
+git clone git@github.com:learhy/auditbeat-boundary-demo.git
 cd auditbeat-boundary-demo
 docker-compose up -d
 ```
