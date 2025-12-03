@@ -9,8 +9,31 @@ A complete demo environment showing how Auditbeat can provide detailed session a
 
 1. **Prerequisites**: 
    - Install Docker and Docker Compose
-   - Install HashiCorp Boundary CLI: `brew install hashicorp/tap/boundary` (macOS) or [download from HashiCorp](https://developer.hashicorp.com/boundary/downloads)
    - **Boundary Enterprise License** (required for SSH certificate injection)
+   - **Install Boundary Enterprise CLI** (not the standard OSS version):
+   
+   **Option A: Download from HashiCorp** (Recommended)
+   ```bash
+   # For macOS Apple Silicon (M1/M2/M3)
+   curl -O https://releases.hashicorp.com/boundary/0.19.3+ent/boundary_0.19.3+ent_darwin_arm64.zip
+   unzip boundary_0.19.3+ent_darwin_arm64.zip
+   sudo mv boundary /usr/local/bin/
+   
+   # For macOS Intel
+   curl -O https://releases.hashicorp.com/boundary/0.19.3+ent/boundary_0.19.3+ent_darwin_amd64.zip
+   unzip boundary_0.19.3+ent_darwin_amd64.zip
+   sudo mv boundary /usr/local/bin/
+   
+   # Verify Enterprise version is installed
+   boundary version  # Should show "0.19.3+ent"
+   ```
+   
+   **Option B: Download from web**
+   - Visit https://releases.hashicorp.com/boundary/
+   - Download the **Enterprise version** (`+ent`) for your platform
+   - Extract and move to `/usr/local/bin/`
+   
+   ⚠️ **Important**: The `+ent` suffix is required. The standard Homebrew version (`brew install boundary`) is open-source and does NOT support SSH certificate injection.
 
 2. **Clone the repository**:
    ```bash
