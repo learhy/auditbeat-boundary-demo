@@ -1,101 +1,185 @@
 
 # Auditbeat Boundary Demo Environment
 
-A complete demo environment showing how Auditbeat can provide excellent detailed session audit logging for Boundary targets
+A complete demo environment showing how Auditbeat can provide detailed session audit logging that is complimentary to Boundary Session Recording. This demo integrates HashiCorp Boundary to demonstrate how session metadata (session IDs, user IDs, target IDs) can be captured and correlated with audit events.
 
 ## Quick Start
 
+1. **Prerequisites**: 
+   - Install Docker and Docker Compose
+   - Install HashiCorp Boundary CLI: `brew install hashicorp/tap/boundary` (macOS) or [download from HashiCorp](https://developer.hashicorp.com/boundary/downloads)
 
-1. **Prerequisites**: Install Docker and Docker Compose
+2. **Start Boundary Dev Mode**:
 
-2. **Clone and start**:
-```bash
-git clone git@github.com:learhy/auditbeat-boundary-demo.git
-cd auditbeat-boundary-demo
-docker-compose up -d
-```
+   In a **separate terminal window**, start Boundary in development mode:
+   ```bash
+   boundary dev
+   ```
+   
+   **Keep this terminal running!** The demo containers will connect to Boundary at `http://localhost:9200`.
+   
+   Development mode provides:
+   - Pre-configured admin user (login: `admin`, password: `password`)
+   - API endpoint on port 9200
+   - No persistent storage (resets on restart)
 
-3. **Wait for initial setup (about 3-4 minutes)**:
+3. **Clone and start the demo**:
+   ```bash
+   git clone git@github.com:learhy/auditbeat-boundary-demo.git
+   cd auditbeat-boundary-demo
+   docker-compose up -d
+   ```
 
-```bash
-# Check status
-docker-compose ps
-# Watch setup progress
-docker-compose logs -f demo-activity-generator
-```
+4. **HUGELY IMPORTANT: Wait for initial setup (about 3-4 minutes)**:
 
-4. **Access Kibana**: 
+   The Kibana instance takes a few minutes to configure. If you access Kibana before it's configured, the data won't pop out at you. 
+
+   ```bash
+   # Check status
+   docker-compose ps
+   
+   # Watch Boundary configuration
+   docker-compose logs -f boundary-setup
+   
+   # Watch session generation
+   docker-compose logs -f activity-generator
+   ```
+
+5. **Access Kibana**:
 
 Open [`http://localhost:5601`](http://localhost:5601)
 
-5. Generate additional demo activity (optional):
-```bash
-# Run all scenarios again
-docker-compose exec demo-activity-generator /scripts/activity-generator.sh 5
+6. **(Optional) Manually connect via Boundary**:
 
-# Or run specific scenarios
-docker-compose exec demo-activity-generator /scripts/activity-generator.sh 1  # Normal activity
-docker-compose exec demo-activity-generator /scripts/activity-generator.sh 2  # Privilege escalation  
-docker-compose exec demo-activity-generator /scripts/activity-generator.sh 3  # Suspicious file access
-docker-compose exec demo-activity-generator /scripts/activity-generator.sh 4  # Network reconnaissance
-```
+   After auto-configuration completes, you can manually connect to the SSH target through Boundary:
+   
+   ```bash
+   # Authenticate with Boundary
+   boundary authenticate password -auth-method-id ampw_1234567890 -login-name admin -password password
+   
+   # Get the target ID from setup logs
+   docker-compose logs boundary-setup | grep TARGET_ID
+   
+   # Connect through Boundary (use the TARGET_ID from above)
+   boundary connect ssh -target-id <TARGET_ID> -username ubuntu
+   # Password: password
+   ```
 
 ## What's Included
 
-- Elasticsearch: Stores audit events
-- Kibana: Visualizes and searches audit data
-- Auditbeat: Collects system audit events
-- Demo App: Generates realistic user activity
-- Auto-setup: Pre-configured index patterns and dashboards
+- **Elasticsearch**: Stores audit events
+- **Kibana**: Visualizes and searches audit data  
+- **Auditbeat**: Collects system audit events using kernel auditd rules
+- **Boundary Integration**: Generates SSH sessions through Boundary with metadata tracking
+  - Auto-configures Boundary with SSH targets
+  - Creates sessions every 45 seconds with unique session IDs
+  - Logs session metadata for correlation with audit events
+- **SSH Target**: Ubuntu container with OpenSSH server for demonstration
+- **Activity Generator**: Simulates user activity and Boundary sessions
+- **Auto-setup**: Pre-configured index patterns and saved searches
 
-## Demo Scenarios
+## How Boundary Integration Works
 
-The activity generator includes:
+This demo showcases how Boundary session metadata can be correlated with audit events:
 
-1. Normal Activity: Basic file operations and commands
-2. Privilege Escalation: sudo attempts, su commands
-3. Suspicious File Access: Reading sensitive files, copying system files
-4. Network Activity: Port scanning, external connections
+1. **Session Creation**: The `generate-boundary-sessions.sh` script authenticates with Boundary and creates authorized sessions
+2. **Metadata Capture**: Each session includes:
+   - `boundary.session_id`: Unique Boundary session identifier
+   - `boundary.user_id`: Boundary user who initiated the session
+   - `boundary.target_id`: Target system being accessed
+3. **Activity Logging**: Simulated activities during sessions are logged with full Boundary context
+4. **Correlation**: Security analysts can track all actions back to specific Boundary sessions and users
+
+## Simulated Session Activities
+
+The Boundary session generator simulates these activities:
+
+1. **Normal File Access**: Reading common configuration files (`/etc/hosts`)
+2. **Config File Reads**: Accessing SSH configuration (`/etc/ssh/sshd_config`)
+3. **Privilege Escalation**: Attempting sudo operations
+4. **Sensitive File Access**: Reading password files (`/etc/passwd`)
+5. **Process Listing**: Enumerating running processes
 
 ## Viewing Results
 
 1. Open Kibana at [`http://localhost:5601`](http://localhost:5601)
-2. Choose one of these options:
+2. Navigate to **Discover**
+3. Select the `auditbeat-*` index pattern
+4. You should see audit events from the activity generator
 
-### Option A: Pre-configured Saved Search (Recommended)
-- Go to **Discover**
-- Click **Open** in the top menu
-- Select **"Boundary Audit Events"**
-- This view is pre-configured with the key correlation columns
+**Note**: The current demo generates structured JSON logs with Boundary session metadata. In a production environment:
+- Auditbeat would capture actual SSH session events from the kernel audit subsystem
+- SSH certificates from Boundary would include session metadata in certificate principals
+- This metadata would flow through to auditd logs and be indexed by Auditbeat
 
-### Option B: Dashboard View
-- Go to **Dashboard**
-- Open **"Boundary Audit Dashboard"**
-- View audit events in a dashboard layout
+### Viewing Session Logs
 
-### Option C: Manual Discovery
-- Go to **Discover**
-- Select `auditbeat-*` index pattern
-- Manually add columns for the key fields listed below
+To see the Boundary session activity logs directly:
+```bash
+# View recent session logs
+docker-compose exec activity-generator cat /tmp/audit-demo/boundary-activity.log | tail -20
+
+# Watch live session activity
+docker-compose logs -f activity-generator
+```
 
 ## Key Fields for Boundary Correlation
 
-The pre-configured views include these important fields:
+The session logs include these important fields for correlation:
 
 - `@timestamp` - When the event occurred
-- `event.action` - What action was performed  
-- `process.title` - Which process executed
+- `event.action` - What action was performed
+- `boundary.session_id` - Unique Boundary session identifier  
+- `boundary.user_id` - Boundary user who initiated the session
+- `boundary.target_id` - Target system being accessed
+- `user.name` - Username on the target system
+- `process.name` - Process that executed the action
+- `process.args` - Command line arguments
+- `file.path` - File path that was accessed
+
+In production with full Boundary + Auditbeat integration, you would also see:
+- `auditd.session` - Kernel session tracking ID  
 - `auditd.data.tty` - Terminal session info
-- `auditd.session` - Session tracking ID
 - `auditd.summary.actor.primary` - Primary user
 - `auditd.summary.actor.secondary` - Secondary user (for privilege escalation)
 
 ## Cleanup
 
+```bash
+# Stop and remove containers
 docker-compose down -v
+
+# Stop Boundary dev mode (Ctrl+C in the terminal where it's running)
+```
 
 ## Production Considerations
 
-- This demo runs Auditbeat in containers for simplicity and is not meant for product use whatsoever
-- Production deployments should run Auditbeat directly on target systems
+- This demo runs Auditbeat in containers for simplicity and is **not meant for production use**
+- This demo uses `boundary dev` mode which is **only for development/testing**
+- Production deployments should:
+  - Run Auditbeat directly on target systems (not in containers)
+  - Use production Boundary clusters with proper HA configuration
+  - Configure Boundary with Vault for SSH certificate injection
+  - Enable session recording in Boundary for complete audit trails
+  - Set up proper authentication (OIDC, LDAP) instead of password auth
+  - Use proper certificate authorities for SSH certificate signing
+- The session metadata demonstrated here would be included in SSH certificates via Boundary's certificate injection feature
 - Consider the Elastic License 2.0 restrictions for managed service scenarios
+
+## Architecture Notes
+
+**Current Demo Flow:**
+1. User starts `boundary dev` on host machine (port 9200)
+2. Docker containers start and `boundary-setup` container auto-configures Boundary
+3. `activity-generator` container creates Boundary sessions via API every 45 seconds
+4. Session metadata is logged to structured JSON files
+5. Auditbeat collects system audit events (separate from Boundary session logs)
+
+**Production Flow:**
+1. Boundary cluster with workers deployed
+2. Vault configured for SSH certificate injection
+3. Users authenticate and connect via `boundary connect ssh`
+4. Boundary injects SSH certificates with session metadata embedded
+5. Target system's SSH daemon validates certificate
+6. Auditbeat captures kernel audit events including SSH session metadata from certificates
+7. All events are correlated in Elasticsearch by Boundary session ID
