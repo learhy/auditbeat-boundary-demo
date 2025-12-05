@@ -58,41 +58,29 @@ A complete demo environment showing how Auditbeat can provide detailed session a
    
    The license is already in `.gitignore` to prevent accidental commits.
 
-4. **Start Boundary Enterprise Dev Mode**:
+4. **Start the demo (Boundary + containers)**:
 
-   In a **separate terminal window**, start Boundary in development mode with your enterprise license:
-   ```bash
-   ./start-boundary-enterprise.sh
-   ```
-   
-   Or manually:
-   ```bash
-   export BOUNDARY_LICENSE="$(cat boundary-license.hclic)"
-   boundary dev
-   ```
-   
-   **Keep this terminal running!** The demo containers will connect to Boundary at `http://localhost:9200`.
-   
-   Enterprise development mode provides:
-   - Pre-configured admin user (login: `admin`, password: `password`)
-   - API endpoint on port 9200
-   - **SSH target type** with credential injection
-   - **Vault SSH certificate injection** with session metadata
-   - No persistent storage (resets on restart)
+   The `auditbeat-demo.sh` script will start Boundary Enterprise dev mode **and** all Docker services for you.
 
-5. **Start the demo containers**:
    ```bash
-   docker-compose up -d
+   ./auditbeat-demo.sh start
    ```
 
-6. **Wait for initial setup (about 3-4 minutes)**:
+   This will:
+   - Verify the Boundary Enterprise CLI is installed and licensed
+   - Start `boundary dev` with the correct worker settings
+   - Start all Docker containers via `docker-compose up -d`
+   - Auto-configure Boundary (targets, credential store, credential library)
+   - Wait for a valid SSH target ID and print it to the console
+
+5. **Wait for initial setup (about 3-4 minutes)**:
 
    The Kibana instance takes a few minutes to configure. If you access Kibana before it's configured, the data won't pop out at you. 
 
    ```bash
-   # Check status
-   docker-compose ps
-   
+   # Check overall demo status (Boundary dev + containers)
+   ./auditbeat-demo.sh status
+
    # Watch Boundary configuration
    docker-compose logs -f boundary-setup
    
@@ -256,10 +244,11 @@ In production with full Boundary + Auditbeat integration, you would also typical
 ## Cleanup
 
 ```bash
-# Stop and remove containers
-docker-compose down -v
+# Stop Boundary dev and all demo containers
+./auditbeat-demo.sh stop
 
-# Stop Boundary dev mode (Ctrl+C in the terminal where it's running)
+# (Optional) Remove all Docker volumes/state
+# docker-compose down -v
 ```
 
 ## Production Considerations
@@ -279,7 +268,7 @@ docker-compose down -v
 ## Architecture Notes
 
 **Current Demo Flow:**
-1. User starts `boundary dev` on host machine (port 9200)
+1. User runs `./auditbeat-demo.sh start` (which starts `boundary dev` and all Docker services)
 2. Docker containers start and `boundary-setup` container auto-configures Boundary
 3. `activity-generator` container creates Boundary sessions via API every 45 seconds
 4. Session metadata is logged to structured JSON files
