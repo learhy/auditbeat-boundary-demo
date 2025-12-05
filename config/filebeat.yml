@@ -1,0 +1,37 @@
+filebeat.inputs:
+  - type: filestream
+    id: sshd-log
+    enabled: true
+    paths:
+      - /var/log/sshd.log
+
+    processors:
+      - add_fields:
+          target: boundary
+          fields:
+            source: "ssh-target"
+      - dissect:
+          # Parse lines like:
+          #   Accepted publickey for ubuntu from 192.168.65.1 port 40824 ssh2: ECDSA-CERT SHA256:... ID boundary-user-admin (serial 123) CA RSA SHA256:...
+          tokenizer: "Accepted publickey for %{user} from %{client_ip} port %{client_port} ssh2: %{key_type} %{?key_fingerprint} ID %{vault_token_id} (serial %{vault_serial}) CA %{ca_type} %{?ca_fingerprint}"
+          field: "message"
+          target_prefix: "ssh"
+          ignore_failure: true
+      - dissect:
+          # Extract Boundary project, username, and target from key_id pattern:
+          #   boundary-project-<project>-user-<user>-target-<target>
+          tokenizer: "boundary-project-%{project}-user-%{user}-target-%{target}"
+          field: "ssh.vault_token_id"
+          target_prefix: "boundary"
+          ignore_failure: true
+
+setup.template.enabled: true
+setup.template.name: "sshd-logs"
+setup.template.pattern: "sshd-logs-*"
+
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+  index: "sshd-logs-%{+yyyy.MM.dd}"
+
+setup.kibana:
+  host: "kibana:5601"

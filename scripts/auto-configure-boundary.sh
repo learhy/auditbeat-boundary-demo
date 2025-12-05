@@ -153,8 +153,9 @@ CLIB_RESPONSE=$(curl -s -X POST "$BOUNDARY_ADDR/v1/credential-libraries" \
             \"username\": \"ubuntu\",
             \"key_type\": \"ecdsa\",
             \"key_bits\": 521,
+            \"key_id\": \"boundary-project-demo-project-user-{{ .User.Name }}-target-ssh-demo-target\",
             \"extensions\": {
-                \"permit-pty\": \"\"
+                \"permit-pty\": \"\"\
             }
         }
     }")
@@ -179,31 +180,47 @@ fi
 
 # Create SSH target (type=ssh, not tcp)
 echo "🎯 Creating SSH target..."
+TARGET_PAYLOAD=$(cat <<EOF
+{
+  "scope_id": "$PROJECT_ID",
+  "name": "ssh-demo-target",
+  "description": "SSH target for demo with certificate injection",
+  "type": "ssh",
+  "address": "localhost",
+  "attributes": {
+    "default_port": 2222
+  }
+}
+EOF
+)
+
 TARGET_RESPONSE=$(curl -s -X POST "$BOUNDARY_ADDR/v1/targets" \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{
-        \"scope_id\": \"$PROJECT_ID\",
-        \"name\": \"ssh-demo-target\", 
-        \"description\": \"SSH target for demo with certificate injection\",
-        \"type\": \"ssh\",
-        \"default_port\": 2222,
-        \"address\": \"localhost\"
-    }")
+    -d "$TARGET_PAYLOAD")
 
 TARGET_ID=$(echo "$TARGET_RESPONSE" | jq -r '.item.id' 2>/dev/null)
 if [ -z "$TARGET_ID" ] || [ "$TARGET_ID" = "null" ]; then
-    echo "⚠️ Target might already exist, searching..."
+    echo "⚠️ Target creation returned no ID, searching for existing target..."
     EXISTING_TARGETS=$(curl -s -H "Authorization: Bearer $TOKEN" "$BOUNDARY_ADDR/v1/targets?scope_id=$PROJECT_ID")
     TARGET_ID=$(echo "$EXISTING_TARGETS" | jq -r '.items[] | select(.name=="ssh-demo-target") | .id' 2>/dev/null)
     
     if [ -z "$TARGET_ID" ] || [ "$TARGET_ID" = "null" ]; then
         echo "❌ Failed to create or find target"
-        echo "Target response: $TARGET_RESPONSE"
-        echo "Existing targets: $EXISTING_TARGETS"
+        echo "Target creation response: $TARGET_RESPONSE"
+        echo "Existing targets query: $EXISTING_TARGETS"
         exit 1
     fi
-    echo "✅ Found existing target: $TARGET_ID"
+    
+    # Verify the target actually exists by reading it
+    VERIFY_TARGET=$(curl -s -H "Authorization: Bearer $TOKEN" "$BOUNDARY_ADDR/v1/targets/$TARGET_ID")
+    VERIFY_ID=$(echo "$VERIFY_TARGET" | jq -r '.item.id // .id // "null"' 2>/dev/null)
+    if [ "$VERIFY_ID" = "null" ] || [ -z "$VERIFY_ID" ]; then
+        echo "❌ Target $TARGET_ID does not exist in Boundary (stale cached ID)"
+        echo "Verify response: $VERIFY_TARGET"
+        exit 1
+    fi
+    echo "✅ Found and verified existing target: $TARGET_ID"
 else
     echo "✅ Created new target: $TARGET_ID"
 fi
@@ -263,9 +280,10 @@ else
     echo "This may be due to API response format. Testing connection..."
 fi
 
-# Save TARGET_ID to shared volume for activity-generator
+# Save TARGET_ID and AUTH_METHOD_ID to shared volume for activity-generator
 mkdir -p "$SHARED_DIR"
 echo "$TARGET_ID" > "$SHARED_DIR/target-id"
+echo "$AUTH_METHOD_ID" > "$SHARED_DIR/auth-method-id"
 
 echo ""
 echo "🎉 BOUNDARY AUTO-CONFIGURATION COMPLETE!"
