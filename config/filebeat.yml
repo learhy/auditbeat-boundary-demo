@@ -24,6 +24,13 @@ filebeat.inputs:
           field: "ssh.vault_token_id"
           target_prefix: "boundary"
           ignore_failure: true
+      - copy_fields:
+          # Alias ssh.vault_token_id into a more generic ssh.cert.id field
+          fields:
+            - from: "ssh.vault_token_id"
+              to: "ssh.cert.id"
+          fail_on_error: false
+          ignore_missing: true
 
 setup.template.enabled: true
 setup.template.name: "sshd-logs"
