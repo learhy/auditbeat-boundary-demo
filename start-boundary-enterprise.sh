@@ -26,5 +26,10 @@ echo "   - Credential injection (not just brokering)"
 echo "   - Session recording"
 echo ""
 
+# Make the dev worker reachable from Docker containers by advertising a
+# public address on the host and binding the proxy listener on 0.0.0.0.
+export BOUNDARY_DEV_WORKER_PUBLIC_ADDRESS="host.docker.internal:9202"
+export BOUNDARY_DEV_WORKER_PROXY_LISTEN_ADDRESS="0.0.0.0:9202"
+
 # Start boundary dev with the license
 boundary dev

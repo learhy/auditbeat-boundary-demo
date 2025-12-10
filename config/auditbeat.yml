@@ -1,18 +1,16 @@
 auditbeat.modules:
 - module: auditd
-  audit_rule_files: [ '${path.config}/audit.rules.d/*.conf' ]
   audit_rules: |
-    # File access monitoring
+    # File access monitoring for sensitive paths
     -w /etc/passwd -p rwxa -k password_file
     -w /etc/shadow -p rwxa -k shadow_file
-    -w /etc/ssh/sshd_config -p rwxa -k ssh_config
     -w /root -p rwxa -k root_access
     -w /tmp -p rwxa -k tmp_access
-    
-    # Process execution monitoring
+
+    # Process execution monitoring (captures commands run via SSH sessions)
     -a always,exit -F arch=b64 -S execve -k process_execution
     -a always,exit -F arch=b32 -S execve -k process_execution
-    
+
     # Privilege escalation monitoring
     -a always,exit -F path=/usr/bin/sudo -F perm=x -F auid>=1000 -F auid!=4294967295 -k privilege_escalation
     -a always,exit -F path=/bin/su -F perm=x -F auid>=1000 -F auid!=4294967295 -k privilege_escalation

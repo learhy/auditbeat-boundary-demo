@@ -35,6 +35,21 @@ for i in $(seq 1 60); do
   fi
 done
 
+# Wait for AUTH_METHOD_ID from boundary-setup
+echo "⏳ Waiting for AUTH_METHOD_ID from boundary-setup..."
+for i in $(seq 1 60); do
+  if [ -s "$SHARED_DIR/auth-method-id" ]; then
+    AUTH_METHOD_ID=$(cat "$SHARED_DIR/auth-method-id")
+    log_activity "✅ Got AUTH_METHOD_ID: $AUTH_METHOD_ID"
+    break
+  fi
+  echo "  Waiting for auth-method-id ($i)..."; sleep 2
+  if [ "$i" -eq 60 ]; then
+    log_activity "❌ AUTH_METHOD_ID not found after 60 attempts"
+    exit 0
+  fi
+done
+
 # Wait for Boundary to be ready
 log_activity "Checking Boundary availability at $BOUNDARY_ADDR..."
 for i in $(seq 1 30); do
@@ -61,7 +76,7 @@ log_activity "🔑 Authenticating to Boundary..."
 export BOUNDARY_ADDR
 export BOUNDARY_PASSWORD=password
 AUTH_OUTPUT=$(boundary authenticate password \
-  -auth-method-id ampw_1234567890 \
+  -auth-method-id "$AUTH_METHOD_ID" \
   -login-name admin \
   -password env://BOUNDARY_PASSWORD \
   -keyring-type none \
@@ -86,13 +101,14 @@ log_activity "✅ Authenticated with Boundary"
 # Establish SSH session through Boundary and run commands
 log_activity "🔔 Establishing SSH session through Boundary to target $TARGET_ID..."
 
-# Run commands through Boundary SSH connection  
-# boundary connect ssh will proxy SSH and pass any remaining args to ssh command
+# Run commands through Boundary SSH connection using -remote-command
 log_activity "Running whoami command..."
 if boundary connect ssh \
+  -addr "$BOUNDARY_ADDR" \
+  -token env://BOUNDARY_TOKEN \
   -target-id "$TARGET_ID" \
   -username ubuntu \
-  whoami 2>&1 | tee -a "$LOG_FILE"; then
+  -remote-command 'whoami' 2>&1 | tee -a "$LOG_FILE"; then
   log_activity "✅ SSH session 1 (whoami) completed"
 else
   log_activity "⚠️ SSH session 1 failed"
@@ -100,9 +116,11 @@ fi
 
 log_activity "Reading /etc/passwd..."
 if boundary connect ssh \
+  -addr "$BOUNDARY_ADDR" \
+  -token env://BOUNDARY_TOKEN \
   -target-id "$TARGET_ID" \
   -username ubuntu \
-  cat /etc/passwd 2>&1 | tee -a "$LOG_FILE"; then
+  -remote-command 'cat /etc/passwd' 2>&1 | tee -a "$LOG_FILE"; then
   log_activity "✅ SSH session 2 (cat /etc/passwd) completed"
 else
   log_activity "⚠️ SSH session 2 failed"
@@ -110,9 +128,11 @@ fi
 
 log_activity "Listing processes..."
 if boundary connect ssh \
+  -addr "$BOUNDARY_ADDR" \
+  -token env://BOUNDARY_TOKEN \
   -target-id "$TARGET_ID" \
   -username ubuntu \
-  ps aux 2>&1 | tee -a "$LOG_FILE"; then
+  -remote-command 'ps aux' 2>&1 | tee -a "$LOG_FILE"; then
   log_activity "✅ SSH session 3 (ps aux) completed"
 else
   log_activity "⚠️ SSH session 3 failed"

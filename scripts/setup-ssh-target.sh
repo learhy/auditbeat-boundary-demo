@@ -36,22 +36,10 @@ echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config
 echo 'LogLevel VERBOSE' >> /etc/ssh/sshd_config
 echo 'SyslogFacility AUTHPRIV' >> /etc/ssh/sshd_config
 
-# Install Auditbeat
-ARCH=$(dpkg --print-architecture)
-AB_VER=8.11.0
-AB_DEB="auditbeat-${AB_VER}-${ARCH}.deb"
-echo "Downloading Auditbeat ${AB_VER} for ${ARCH}"
-curl -fsSL -o "/tmp/${AB_DEB}" "https://artifacts.elastic.co/downloads/beats/auditbeat/${AB_DEB}"
-DEBIAN_FRONTEND=noninteractive dpkg -i "/tmp/${AB_DEB}"
-rm -f "/tmp/${AB_DEB}"
-
-# Copy our custom config
-echo "Copying custom auditbeat config..."
-cp /config/auditbeat.yml /etc/auditbeat/auditbeat.yml
-
-# Skip auditbeat for now - it needs host audit subsystem access
-# echo "✅ Starting Auditbeat in background..."
-# /usr/bin/auditbeat -c /etc/auditbeat/auditbeat.yml -e &
+# NOTE: Auditbeat now runs in a dedicated container (`auditbeat` service
+# in docker-compose.yml) with host-level access to the kernel audit
+# subsystem. We no longer install or start Auditbeat inside ssh-target.
 
 echo "✅ Starting SSHD in foreground..."
-exec /usr/sbin/sshd -D
+# Log SSHD output to a dedicated log file so we can inspect certificate/auth errors
+exec /usr/sbin/sshd -D -E /var/log/sshd.log
